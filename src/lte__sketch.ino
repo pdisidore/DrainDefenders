@@ -14,6 +14,7 @@
 */
 
 #include "BotleticsSIM7000.h" // https://github.com/botletics/Botletics-SIM7000/tree/main/src
+#include <TimeLib.h>
 
 /******* ORIGINAL ADAFRUIT FONA LIBRARY TEXT *******/
 /***************************************************
@@ -34,44 +35,16 @@
   Written by Limor Fried/Ladyada for Adafruit Industries.
   BSD license, all text above must be included in any redistribution
  ****************************************************/
-
-// Define *one* of the following lines:
-//#define SIMCOM_2G // SIM800/808/900/908, etc.
-//#define SIMCOM_3G // SIM5320
 #define SIMCOM_7000
-//#define SIMCOM_7070
-//#define SIMCOM_7500
-//#define SIMCOM_7600
-
-// For TinySine SIM5320 shield
-//#define PWRKEY 8
-//#define RST 9
-//#define TX 2 // Microcontroller RX (note: won't work on Mega)
-//#define RX 3 // Microcontroller TX
-
-// ESP8266 + SIM7000 shield
-//#define PWRKEY 14 // D5 on NodeMCU
-//#define RST 12 // D6 on NodeMCU
-//#define TX 4 // D2 on NodeMCU, microcontroller RX
-//#define RX 5 // D1 on NodeMCU, microcontroller TX
 
 // For botletics SIM7000 shield
-#define PWRKEY 6
-#define RST 7
 //#define DTR 8 // Connect with solder jumper
 //#define RI 9 // Need to enable via AT commands
+//#define T_ALERT 12 // Connect with solder jumper
+#define PWRKEY 6
+#define RST 7
 #define TX 0 // Microcontroller RX
 #define RX 1 // Microcontroller TX
-//#define T_ALERT 12 // Connect with solder jumper
-
-// For botletics SIM7500 shield
-//#define PWRKEY 6
-//#define RST 7
-////#define DTR 9 // Connect with solder jumper
-////#define RI 8 // Need to enable via AT commands
-//#define TX 11 // Microcontroller RX
-//#define RX 10 // Microcontroller TX
-////#define T_ALERT 5 // Connect with solder jumper
 
 // this is a large buffer for replies
 char replybuffer[255];
@@ -149,7 +122,8 @@ void setup() {
   if (! modem.begin(*modemSerial)) {
     DEBUG_PRINTLN(F("Couldn't find SIM7000"));
   }
-  
+  time_t t = now();
+
   
   // The commented block of code below is an alternative that will find the module at 115200
   // Then switch it to 4800 without having to wait for the module to turn on and manually
@@ -184,7 +158,7 @@ void setup() {
       Serial.println(F("SIM5320A (American)")); break;
     case SIM5320E:
       Serial.println(F("SIM5320E (European)")); break;
-    case SIM7000:
+    case SIM7000: //The one we have
       Serial.println(F("SIM7000")); break;
     case SIM7070:
       Serial.println(F("SIM7070")); break;
@@ -323,11 +297,34 @@ void printMenu(void) {
 void loop() {
   Serial.print(F("Modem> "));
   while (! Serial.available() ) {
+    
     if (modem.available()) {
       Serial.write(modem.read());
     }
   }
 
+
+  //testing automating commands
+  //every 5 seconds, print battery
+  if(second(t) % 5 == 0){
+    // read the battery voltage and percentage
+    uint16_t vbat;
+    if (! modem.getBattVoltage(&vbat)) {
+      Serial.println(F("Failed to read Batt"));
+    } 
+    else {
+      Serial.print(F("VBat = ")); Serial.print(vbat); Serial.println(F(" mV"));
+    }
+
+    if (type != SIM7500 && type != SIM7600) {
+      if (! modem.getBattPercent(&vbat)) {
+        Serial.println(F("Failed to read Batt"));
+      }
+      else {
+        Serial.print(F("VPct = ")); Serial.print(vbat); Serial.println(F("%"));
+      }
+    }
+  }
   char command = Serial.read();
   Serial.println(command);
 
