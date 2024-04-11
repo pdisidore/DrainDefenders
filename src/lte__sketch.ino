@@ -48,30 +48,39 @@
 #define MQTT_USERNAME ""
 #define MQTT_KEY ""
 #define TURB_TOPIC "/Turbidity"
+#define VBAT_TOPIC "/Battery"
+#define LEDPIN 13
 
 // this is a large buffer for replies
 char replybuffer[255];
 unsigned long lastMsg = 0;
 const int filter_length = 32;
 
-uint16_t VbatBuffer[filter_length];
-uint32_t VbatFor32Readings = 0;
+uint16_t VbatMAF[filter_length];
+uint32_t VbatSum = 0;
 unsigned int i = 0;
+unsigned long VbatIndex = 0;
 
-unsigned long AvgTurbArr[filter_length];
+
+unsigned long TurbMAF[filter_length];
 unsigned long TurbSum = 0;
-
-int right = 0;
+unsigned long right = 0;
 
 // Hardware serial is also possible!
 HardwareSerial *modemSerial = &Serial1;
 
 Botletics_modem_LTE modem = Botletics_modem_LTE();
 
-void ConnectToMQTT();
+
+
 uint8_t readline(char *buff, uint8_t maxbuff, uint16_t timeout = 0);
 uint8_t type;
 char imei[16] = { 0 };  // MUST use a 16 character buffer for IMEI!
+
+void ConnectToMQTT();
+void CollectTurbidityData();
+void SendTurbidityMQTTPacket();
+void CollectVbatData();
 
 void setup() {
 
@@ -134,66 +143,97 @@ void setup() {
     /*******************mqtt connection********************/
     //https://github.com/botletics/SIM7000-LTE-Shield/wiki/Library-Functions#modemmqttconnect
     ConnectToMQTT();
+
+    pinMode(LEDPIN, OUTPUT);
+    digitalWrite(LEDPIN, LOW);
     //LAST OF ADDED SINCE PUSH
   }
 }
 
 void loop() {
-  char command;
-  //testing automating commands
-  //every 5 seconds, print battery
   unsigned long now = millis();
-
   uint64_t timeInMilli = (now - lastMsg + 0xFFFF) % 0xFFFF;
+
   if (timeInMilli >= 1000) {
-    uint16_t vbat;
-
     lastMsg = now;
-    if (i < filter_length) {  //could update to moving average instead of constant averaging
 
-      AvgTurbArr[i] = analogRead(24);
-      TurbSum += analogRead(24);
+    if (i < filter_length) {  //could update to moving average instead of constant averaging
+      CollectTurbidityData();
+      CollectVbatData();
       i++;
     } else {
-
-      ConnectToMQTT();
-
-      uint16_t turbLevel = TurbSum >> 5;
-
-      Serial.print(F("Turb = "));
-      Serial.println(turbLevel);
-
-      // Post data to website via 2G or LTE CAT-M/NB-IoT
-      //float turb = 730 - analogRead(24);
-      float turb = analogRead(24);
-
-      // Create char buffers for the floating point numbers for sprintf
-      // Make sure these buffers are long enough for your request URL
-      char URL[150];
-      char body[100];
-      char turbSendBuff[16];
-
-      // Format the floating point numbers as needed
-      dtostrf(turb, 1, 2, turbSendBuff);  // float_val, min_width, digits_after_decimal, char_buffer
-      sprintf(URL, "dweet.io/dweet/for/%s?turb=%s&batt", imei, turbSendBuff);
-
-      if (!modem.postData("GET", URL)) {
-        Serial.println(F("Failed to complete HTTP GET..."));
-      } else {
-        Serial.println(F("Complete HTTP GET..."));
-      }
-
-      if (!modem.MQTT_publish(TURB_TOPIC, turbSendBuff, strlen(turbSendBuff), 1, 0)) {
-        Serial.println(F("Failed to publish!"));
-      }  // Send Turbidity
-      else {
-        Serial.println(F("Published data!"));
-      }
-
-      VbatFor32Readings = 0;
-      TurbSum = 0;
+      SendTurbidityMQTTPacket();
       i = 0;
     }
+  }
+}
+
+void CollectTurbidityData() {
+  int currTurb = analogRead(24);
+  TurbSum += currTurb;
+  TurbSum -= TurbMAF[right];
+  TurbMAF[right] = currTurb;
+  right = (right + 1) % filter_length;
+
+  int shiftedTurb = (TurbSum >> 5);
+
+  Serial.print(" Current Turb: ");
+  Serial.print(currTurb);
+  Serial.print(" Shifted Turb Sum: ");
+  Serial.println(shiftedTurb);
+}
+
+void CollectVbatData() {
+  int currVbat =  0;//define analog Read
+  VbatSum += currVbat;
+  VbatSum -= VbatMAF[VbatIndex];
+  VbatMAF[VbatIndex] = currVbat;
+  VbatIndex = (VbatIndex + 1) % filter_length; 
+
+  int shiftedVbat = (VbatSum >> 5);
+
+  Serial.print(" Current Vbat: ");
+  Serial.print(currVbat);
+  Serial.print(" Shifted Turb Vbat: ");
+  Serial.println(shiftedVbat);
+}
+
+void SendTurbidityMQTTPacket() {
+  ConnectToMQTT();
+  uint16_t turbLevel = TurbSum >> 5;
+  uint16_t VbatLevel = VbatSum >> 5;
+
+  // Create char buffers for the floating point numbers for sprintf
+  // Make sure these buffers are long enough for your request URL
+  char URL[150];
+  char body[100];
+  char turbSendBuff[16];
+  char vbatSendBuff[16];
+
+  // Format the floating point numbers as needed
+  dtostrf(turbLevel, 1, 2, turbSendBuff);  // float_val, min_width, digits_after_decimal, char_buffer
+  dtostrf(VbatLevel, 1, 2, vbatSendBuff);  // float_val, min_width, digits_after_decimal, char_buffer
+  sprintf(URL, "dweet.io/dweet/for/%s?turb=%s&batt", imei, turbSendBuff);
+  sprintf(URL, "dweet.io/dweet/for/%s?turb=%s&batt", imei, vbatSendBuff);
+
+  if (!modem.postData("GET", URL)) {
+    Serial.println(F("Failed to complete HTTP GET..."));
+  } else {
+    Serial.println(F("Complete HTTP GET..."));
+  }
+
+  if (!modem.MQTT_publish(TURB_TOPIC, turbSendBuff, strlen(turbSendBuff), 1, 0)) {
+    Serial.println(F("Failed to publish Turbidity Data!"));
+  }  // Send Turbidity
+  else {
+    Serial.println(F("Published Turbidity data!"));
+  }
+
+  if (!modem.MQTT_publish(VBAT_TOPIC, vbatSendBuff, strlen(vbatSendBuff), 1, 0)) {
+    Serial.println(F("Failed to publish Battery Data!"));
+  } 
+  else {
+    Serial.println(F("Published Battery data!"));
   }
 }
 
