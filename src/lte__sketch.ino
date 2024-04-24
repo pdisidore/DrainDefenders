@@ -13,6 +13,7 @@
 #include "BotleticsSIM7000.h"  // https://github.com/botletics/Botletics-SIM7000/tree/main/src
 #include "Adafruit_MQTT.h"
 #include "Adafruit_MQTT_Client.h"
+#include <cmath>
 
 /******* ORIGINAL ADAFRUIT FONA LIBRARY TEXT *******/
 /***************************************************
@@ -55,6 +56,8 @@
 char replybuffer[255];
 unsigned long lastMsg = 0;
 const int filter_length = 32;
+const int TURB_THRESHOLD = 720;
+const int THRESHOLD_TOLERANCE = 25;
 
 uint16_t VbatMAF[filter_length];
 uint32_t VbatSum = 0;
@@ -79,8 +82,10 @@ char imei[16] = { 0 };  // MUST use a 16 character buffer for IMEI!
 
 void ConnectToMQTT();
 void CollectTurbidityData();
-void SendTurbidityMQTTPacket();
+void SendTurbidityAndVbatMQTTPacket();
 void CollectVbatData();
+bool CheckForDirtyWater();
+
 
 void setup() {
 
@@ -157,15 +162,33 @@ void loop() {
   if (timeInMilli >= 1000) {
     lastMsg = now;
 
-    if (i < filter_length) {  //could update to moving average instead of constant averaging
-      CollectTurbidityData();
-      CollectVbatData();
-      i++;
-    } else {
-      SendTurbidityMQTTPacket();
-      i = 0;
+    CollectTurbidityData();
+    CollectVbatData();
+
+    if(CheckForDirtyWater()){
+      SendTurbidityAndVbatMQTTPacket();
     }
+
+    // if (i < filter_length) {
+    //   CollectTurbidityData();
+    //   CollectVbatData();
+    //   i++;
+    // } else {
+    //   SendTurbidityAndVbatMQTTPacket();
+    //   i = 0;
+    // }
   }
+}
+
+bool CheckForDirtyWater(){
+  int shiftedTurb = (TurbSum >> 5);
+
+  //shiftedTurb > (TURB_THRESHOLD + THRESHOLD_TOLERANCE) ||
+
+  if (shiftedTurb < (TURB_THRESHOLD - THRESHOLD_TOLERANCE)){
+    return true;
+  }
+  return false;
 }
 
 void CollectTurbidityData() {
@@ -177,18 +200,22 @@ void CollectTurbidityData() {
 
   int shiftedTurb = (TurbSum >> 5);
 
-  Serial.print(" Current Turb: ");
+  uint32_t turbidity_NTUs = log(shiftedTurb/(2.7169))/(-2*pow(10,-4));
+
+  Serial.print("Current Turb: ");
   Serial.print(currTurb);
-  Serial.print(" Shifted Turb Sum: ");
+  Serial.print("Shifted Turb Sum: ");
   Serial.println(shiftedTurb);
+  Serial.print("Turbidity in NTUs: ");
+  Serial.println(turbidity_NTUs);
 }
 
 void CollectVbatData() {
-  int currVbat =  0;//define analog Read
+  int currVbat = analogRead(25);  //define analog Read
   VbatSum += currVbat;
   VbatSum -= VbatMAF[VbatIndex];
   VbatMAF[VbatIndex] = currVbat;
-  VbatIndex = (VbatIndex + 1) % filter_length; 
+  VbatIndex = (VbatIndex + 1) % filter_length;
 
   int shiftedVbat = (VbatSum >> 5);
 
@@ -198,7 +225,7 @@ void CollectVbatData() {
   Serial.println(shiftedVbat);
 }
 
-void SendTurbidityMQTTPacket() {
+void SendTurbidityAndVbatMQTTPacket() {
   ConnectToMQTT();
   uint16_t turbLevel = TurbSum >> 5;
   uint16_t VbatLevel = VbatSum >> 5;
@@ -231,8 +258,7 @@ void SendTurbidityMQTTPacket() {
 
   if (!modem.MQTT_publish(VBAT_TOPIC, vbatSendBuff, strlen(vbatSendBuff), 1, 0)) {
     Serial.println(F("Failed to publish Battery Data!"));
-  } 
-  else {
+  } else {
     Serial.println(F("Published Battery data!"));
   }
 }
