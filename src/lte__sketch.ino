@@ -98,7 +98,7 @@ void setup() {
   pinMode(25, INPUT);
   pinMode(23, INPUT);
   pinMode(TX, OUTPUT);
-  pinMode(RX, OUTPUT);
+  pinMode(RX, INPUT);
 
 
 
